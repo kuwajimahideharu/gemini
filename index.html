@@ -746,7 +746,6 @@
       const item = history[index];
       if (!item) return;
 
-      // 現在のリアクションを選択状態に
       document.querySelectorAll('.reaction-opt').forEach((btn) => {
         btn.classList.toggle('selected', btn.dataset.emoji === item.reaction);
       });
@@ -948,8 +947,10 @@
       replyPreviewBar.classList.remove('active');
     }
 
-    async function sendMessage() {
-      const text = msgInput.value.trim();
+    // 通常送信・リアクション即時送信の両方に対応する送信処理
+    async function sendMessage(overrideOptions = null) {
+      const isReactionSend = Boolean(overrideOptions && overrideOptions.isReaction);
+      const text = isReactionSend ? overrideOptions.text : msgInput.value.trim();
       if (!text || isGenerating) return;
 
       const apiKey = localStorage.getItem(STORAGE_KEY_API);
@@ -962,20 +963,26 @@
       const sysPrompt = localStorage.getItem(STORAGE_KEY_SYSPROMPT) ?? DEFAULT_SYSPROMPT;
       const nowStr = getTimeStr();
 
+      const replyToData = isReactionSend ? overrideOptions.replyTo : activeReplyTo;
+
       const userMsg = {
         role: 'user',
         text,
         time: nowStr,
-        ...(activeReplyTo ? { replyTo: activeReplyTo } : {})
+        ...(replyToData ? { replyTo: replyToData } : {}),
+        ...(isReactionSend ? { isReactionMsg: true } : {})
       };
 
-      clearReplyTarget();
+      if (!isReactionSend) {
+        clearReplyTarget();
+        msgInput.value = '';
+        msgInput.style.height = 'auto';
+      }
+
       history.push(userMsg);
       saveHistory();
       renderAll();
 
-      msgInput.value = '';
-      msgInput.style.height = 'auto';
       isGenerating = true;
       sendBtn.disabled = true;
 
@@ -986,14 +993,12 @@
         time: botTimeStr
       }, null);
 
-      // 直近20件の文脈を構築（引用返信やリアクション情報も自然にモデルへ伝達）
       const contents = history.slice(-20).map((m) => {
         let contentText = m.text;
-        if (m.replyTo) {
+        if (m.isReactionMsg && m.replyTo) {
+          contentText = `（${m.replyTo.sender}の発言「${m.replyTo.text}」に対して、ユーザーが「${m.text}」というリアクションを送りました。チャット相手として自然で親しみのあるリアクション返しを簡潔に返してください）`;
+        } else if (m.replyTo) {
           contentText = `【「${m.replyTo.text}」への返信】\n${contentText}`;
-        }
-        if (m.role === 'model' && m.reaction) {
-          contentText += `\n（ユーザーはこの回答に「${m.reaction}」とリアクションしました）`;
         }
         return {
           role: m.role === 'user' ? 'user' : 'model',
@@ -1083,15 +1088,37 @@
     document.querySelectorAll('.reaction-opt').forEach((btn) => {
       btn.addEventListener('click', () => {
         if (activeCtxIndex === null || !history[activeCtxIndex]) return;
+        const targetItem = history[activeCtxIndex];
         const emoji = btn.dataset.emoji;
-        if (history[activeCtxIndex].reaction === emoji) {
-          delete history[activeCtxIndex].reaction;
-        } else {
-          history[activeCtxIndex].reaction = emoji;
+
+        // 同じ絵文字を再度押した場合は解除のみ（再送信しない）
+        if (targetItem.reaction === emoji) {
+          delete targetItem.reaction;
+          saveHistory();
+          closeContextMenu();
+          renderAll();
+          return;
         }
+
+        if (isGenerating) {
+          showToast('応答の生成完了をお待ちください');
+          closeContextMenu();
+          return;
+        }
+
+        targetItem.reaction = emoji;
         saveHistory();
         closeContextMenu();
-        renderAll();
+
+        // リアクション自体を引用メッセージとして即時送信
+        sendMessage({
+          isReaction: true,
+          text: emoji,
+          replyTo: {
+            sender: targetItem.role === 'user' ? 'あなた' : 'Gemini',
+            text: targetItem.text
+          }
+        });
       });
     });
 
@@ -1167,7 +1194,7 @@
       }
     });
 
-    sendBtn.addEventListener('click', sendMessage);
+    sendBtn.addEventListener('click', () => sendMessage());
     document.getElementById('settingsBtn').onclick = openSettings;
     document.getElementById('closeModalBtn').onclick = () => settingsModal.classList.remove('open');
 
