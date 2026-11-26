@@ -9,8 +9,9 @@
   <title>Gemini トーク</title>
   <style>
     :root {
+      --bg-outer: #d7e0ec;
       --bg-chat: #8cabd9;
-      --bg-header: rgba(255, 255, 255, 0.92);
+      --bg-header: rgba(255, 255, 255, 0.94);
       --bubble-user: #8de055;
       --bubble-bot: #ffffff;
       --text-main: #1f2329;
@@ -29,8 +30,8 @@
       margin: 0;
       padding: 0;
       height: 100%;
-      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
-      background-color: var(--bg-chat);
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+      background-color: var(--bg-outer);
       color: var(--text-main);
       overflow: hidden;
     }
@@ -39,11 +40,15 @@
       display: flex;
       flex-direction: column;
       height: 100dvh;
+      max-width: 720px;
+      margin: 0 auto;
+      background-color: var(--bg-chat);
+      box-shadow: 0 0 24px rgba(0, 0, 0, 0.12);
     }
 
     /* ヘッダー */
     header {
-      padding: calc(var(--safe-top) + 10px) 14px 10px;
+      padding: calc(var(--safe-top) + 10px) 16px 10px;
       background: var(--bg-header);
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
@@ -85,6 +90,10 @@
       cursor: pointer;
     }
 
+    .icon-btn:hover {
+      background: #e2e8f0;
+    }
+
     .icon-btn:active {
       opacity: 0.7;
     }
@@ -93,7 +102,7 @@
     .chat-area {
       flex: 1;
       overflow-y: auto;
-      padding: 14px 12px 20px;
+      padding: 16px 14px 20px;
       display: flex;
       flex-direction: column;
       gap: 14px;
@@ -205,6 +214,10 @@
       cursor: pointer;
     }
 
+    .outer-copy-btn:hover {
+      background: rgba(255, 255, 255, 0.5);
+    }
+
     .search-badge {
       font-size: 10px;
       color: rgba(255, 255, 255, 0.95);
@@ -215,7 +228,7 @@
     /* 入力欄 */
     .input-bar {
       background: #ffffff;
-      padding: 8px 10px calc(var(--safe-bottom) + 8px);
+      padding: 8px 12px calc(var(--safe-bottom) + 8px);
       display: flex;
       align-items: flex-end;
       gap: 8px;
@@ -230,7 +243,7 @@
       padding: 9px 14px;
       font-size: 16px;
       line-height: 1.4;
-      max-height: 120px;
+      max-height: 160px;
       resize: none;
       outline: none;
       font-family: inherit;
@@ -276,9 +289,9 @@
     .modal {
       background: #ffffff;
       border-radius: 20px;
-      padding: 18px;
+      padding: 20px;
       width: 100%;
-      max-width: 400px;
+      max-width: 440px;
       max-height: 85dvh;
       overflow-y: auto;
       box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
@@ -307,9 +320,9 @@
     }
 
     .modal textarea {
-      min-height: 90px;
+      min-height: 110px;
       resize: vertical;
-      line-height: 1.4;
+      line-height: 1.45;
     }
 
     .modal-actions {
@@ -355,7 +368,7 @@
       </select>
 
       <label for="sysPromptInput">カスタム指示（口調・前提条件）</label>
-      <textarea id="sysPromptInput"></textarea>
+      <textarea id="sysPromptInput" placeholder="例：呼び方や前提条件、回答のスタイルなどを自由に入力できます"></textarea>
 
       <div class="modal-actions">
         <button class="icon-btn" id="closeModalBtn">閉じる</button>
@@ -370,9 +383,7 @@
     const STORAGE_KEY_HISTORY = 'gemini_line_history';
     const STORAGE_KEY_SYSPROMPT = 'gemini_line_sysprompt';
 
-    const DEFAULT_SYSPROMPT =
-      'ユーザーのことを「ひではるさん」と呼び、親しみやすく簡潔に答えてください。' +
-      '居住地は神奈川県川崎市川崎区殿町です。天気の質問には数値データに加えて体感の目安や風速(m/s)も添えてください。';
+    const DEFAULT_SYSPROMPT = '';
 
     const chatArea = document.getElementById('chatArea');
     const msgInput = document.getElementById('msgInput');
@@ -394,16 +405,13 @@
       localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(history));
     }
 
-    // HTMLエスケープ＋簡易マークダウン整形（太字と箇条書き）
     function formatRichText(raw) {
       let safe = raw
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
 
-      // ***太字** のような崩れも吸収して太字化
       safe = safe.replace(/\*{2,3}(.+?)\*{2,3}/g, '<strong>$1</strong>');
-      // 行頭の "* " や "- " を中黒に整形
       safe = safe.replace(/^[\*\-]\s+/gm, '・');
       return safe;
     }
@@ -465,7 +473,6 @@
       wrap.appendChild(meta);
       content.appendChild(wrap);
 
-      // 検索参照バッジ（吹き出しの外側に表示）
       const badge = document.createElement('div');
       badge.className = 'search-badge';
       badge.style.display = usedSearch ? 'block' : 'none';
@@ -482,7 +489,7 @@
     function renderAll() {
       chatArea.innerHTML = '';
       if (history.length === 0) {
-        appendBubble('model', 'こんにちは、ひではるさん！メッセージを送ってみてください。', getTimeStr());
+        appendBubble('model', 'こんにちは！メッセージを送ってみてください。', getTimeStr());
         return;
       }
       history.forEach((item) => {
@@ -603,7 +610,17 @@
 
     msgInput.addEventListener('input', () => {
       msgInput.style.height = 'auto';
-      msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + 'px';
+      msgInput.style.height = Math.min(msgInput.scrollHeight, 160) + 'px';
+    });
+
+    // PC（非タッチ端末または画面幅768px以上）では Enter で送信、Shift+Enter で改行
+    msgInput.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      const isDesktop = window.matchMedia('(min-width: 768px)').matches;
+      if (isDesktop && e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
     });
 
     sendBtn.addEventListener('click', sendMessage);
