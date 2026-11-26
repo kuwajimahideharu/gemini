@@ -127,7 +127,7 @@
     .msg-content {
       display: flex;
       flex-direction: column;
-      max-width: 76%;
+      max-width: 78%;
     }
 
     .msg-row.user .msg-content {
@@ -162,6 +162,10 @@
       box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
     }
 
+    .bubble strong {
+      font-weight: 700;
+    }
+
     .msg-row.bot .bubble {
       background: var(--bubble-bot);
       border-top-left-radius: 6px;
@@ -172,7 +176,7 @@
       border-top-right-radius: 6px;
     }
 
-    /* 吹き出しの外側に配置するメタ情報・コピーボタン */
+    /* 吹き出しの外側に配置するメタ情報・コピーボタン・検索バッジ */
     .meta-col {
       display: flex;
       flex-direction: column;
@@ -201,6 +205,13 @@
       cursor: pointer;
     }
 
+    .search-badge {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.95);
+      margin-top: 3px;
+      margin-left: 4px;
+    }
+
     /* 入力欄 */
     .input-bar {
       background: #ffffff;
@@ -211,13 +222,13 @@
       border-top: 1px solid rgba(0, 0, 0, 0.08);
     }
 
-    textarea {
+    .input-bar textarea {
       flex: 1;
       border: none;
       background: #f1f4f8;
       border-radius: 20px;
       padding: 9px 14px;
-      font-size: 16px; /* iPhoneの自動ズーム防止のため16px */
+      font-size: 16px;
       line-height: 1.4;
       max-height: 120px;
       resize: none;
@@ -254,7 +265,7 @@
       display: none;
       align-items: center;
       justify-content: center;
-      padding: 20px;
+      padding: 16px;
       z-index: 50;
     }
 
@@ -265,14 +276,16 @@
     .modal {
       background: #ffffff;
       border-radius: 20px;
-      padding: 20px;
+      padding: 18px;
       width: 100%;
-      max-width: 380px;
+      max-width: 400px;
+      max-height: 85dvh;
+      overflow-y: auto;
       box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
     }
 
     .modal h2 {
-      margin: 0 0 12px;
+      margin: 0 0 10px;
       font-size: 17px;
     }
 
@@ -284,19 +297,26 @@
       margin: 12px 0 4px;
     }
 
-    .modal input, .modal select {
+    .modal input, .modal select, .modal textarea {
       width: 100%;
       padding: 10px 12px;
       border: 1px solid #cbd5e1;
       border-radius: 12px;
-      font-size: 15px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+
+    .modal textarea {
+      min-height: 90px;
+      resize: vertical;
+      line-height: 1.4;
     }
 
     .modal-actions {
       display: flex;
       justify-content: flex-end;
       gap: 8px;
-      margin-top: 18px;
+      margin-top: 16px;
     }
   </style>
 </head>
@@ -324,15 +344,18 @@
   <!-- 設定モーダル -->
   <div class="modal-backdrop" id="settingsModal">
     <div class="modal">
-      <h2>API設定</h2>
+      <h2>設定</h2>
       <label for="apiKeyInput">Gemini APIキー（無料枠OK）</label>
       <input type="password" id="apiKeyInput" placeholder="AIzaSy..." />
 
       <label for="modelSelect">使用モデル（無料枠対応）</label>
       <select id="modelSelect">
-        <option value="gemini-3.8-flash">gemini-3.8-flash（標準・バランス）</option>
+        <option value="gemini-3.8-flash">gemini-3.8-flash（標準・検索対応）</option>
         <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite（超高速・軽量）</option>
       </select>
+
+      <label for="sysPromptInput">カスタム指示（口調・前提条件）</label>
+      <textarea id="sysPromptInput"></textarea>
 
       <div class="modal-actions">
         <button class="icon-btn" id="closeModalBtn">閉じる</button>
@@ -345,6 +368,11 @@
     const STORAGE_KEY_API = 'gemini_line_api_key';
     const STORAGE_KEY_MODEL = 'gemini_line_model';
     const STORAGE_KEY_HISTORY = 'gemini_line_history';
+    const STORAGE_KEY_SYSPROMPT = 'gemini_line_sysprompt';
+
+    const DEFAULT_SYSPROMPT =
+      'ユーザーのことを「ひではるさん」と呼び、親しみやすく簡潔に答えてください。' +
+      '居住地は神奈川県川崎市川崎区殿町です。天気の質問には数値データに加えて体感の目安や風速(m/s)も添えてください。';
 
     const chatArea = document.getElementById('chatArea');
     const msgInput = document.getElementById('msgInput');
@@ -352,6 +380,7 @@
     const settingsModal = document.getElementById('settingsModal');
     const apiKeyInput = document.getElementById('apiKeyInput');
     const modelSelect = document.getElementById('modelSelect');
+    const sysPromptInput = document.getElementById('sysPromptInput');
 
     let history = JSON.parse(localStorage.getItem(STORAGE_KEY_HISTORY) || '[]');
     let isGenerating = false;
@@ -365,7 +394,21 @@
       localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(history));
     }
 
-    function appendBubble(role, text, timeStr) {
+    // HTMLエスケープ＋簡易マークダウン整形（太字と箇条書き）
+    function formatRichText(raw) {
+      let safe = raw
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      // ***太字** のような崩れも吸収して太字化
+      safe = safe.replace(/\*{2,3}(.+?)\*{2,3}/g, '<strong>$1</strong>');
+      // 行頭の "* " や "- " を中黒に整形
+      safe = safe.replace(/^[\*\-]\s+/gm, '・');
+      return safe;
+    }
+
+    function appendBubble(role, text, timeStr, usedSearch = false) {
       const row = document.createElement('div');
       row.className = `msg-row ${role === 'user' ? 'user' : 'bot'}`;
 
@@ -391,7 +434,12 @@
 
       const bubble = document.createElement('div');
       bubble.className = 'bubble';
-      bubble.textContent = text;
+      bubble.dataset.rawText = text;
+      if (role === 'user') {
+        bubble.textContent = text;
+      } else {
+        bubble.innerHTML = formatRichText(text);
+      }
       wrap.appendChild(bubble);
 
       const meta = document.createElement('div');
@@ -407,7 +455,7 @@
         copyBtn.className = 'outer-copy-btn';
         copyBtn.textContent = 'コピー';
         copyBtn.onclick = () => {
-          navigator.clipboard.writeText(bubble.textContent);
+          navigator.clipboard.writeText(bubble.dataset.rawText || bubble.textContent);
           copyBtn.textContent = '完了';
           setTimeout(() => (copyBtn.textContent = 'コピー'), 1200);
         };
@@ -416,21 +464,29 @@
 
       wrap.appendChild(meta);
       content.appendChild(wrap);
+
+      // 検索参照バッジ（吹き出しの外側に表示）
+      const badge = document.createElement('div');
+      badge.className = 'search-badge';
+      badge.style.display = usedSearch ? 'block' : 'none';
+      badge.textContent = '🔍 Google検索で最新情報を参照';
+      content.appendChild(badge);
+
       row.appendChild(content);
       chatArea.appendChild(row);
       chatArea.scrollTop = chatArea.scrollHeight;
 
-      return bubble;
+      return { bubble, badge };
     }
 
     function renderAll() {
       chatArea.innerHTML = '';
       if (history.length === 0) {
-        appendBubble('model', 'こんにちは！メッセージを送ってみてください。', getTimeStr());
+        appendBubble('model', 'こんにちは、ひではるさん！メッセージを送ってみてください。', getTimeStr());
         return;
       }
       history.forEach((item) => {
-        appendBubble(item.role, item.text, item.time);
+        appendBubble(item.role, item.text, item.time, item.usedSearch);
       });
     }
 
@@ -440,14 +496,14 @@
 
       const apiKey = localStorage.getItem(STORAGE_KEY_API);
       if (!apiKey) {
-        settingsModal.classList.add('open');
+        openSettings();
         return;
       }
 
       const model = localStorage.getItem(STORAGE_KEY_MODEL) || 'gemini-3.8-flash';
+      const sysPrompt = localStorage.getItem(STORAGE_KEY_SYSPROMPT) ?? DEFAULT_SYSPROMPT;
       const nowStr = getTimeStr();
 
-      // ユーザー発言を追加
       history.push({ role: 'user', text, time: nowStr });
       saveHistory();
       appendBubble('user', text, nowStr);
@@ -457,22 +513,31 @@
       isGenerating = true;
       sendBtn.disabled = true;
 
-      // ボットの空吹き出しを先に表示
       const botTimeStr = getTimeStr();
-      const botBubble = appendBubble('model', '…', botTimeStr);
+      const { bubble: botBubble, badge: searchBadge } = appendBubble('model', '…', botTimeStr, false);
 
-      // 直近20件の文脈をAPI形式に変換
       const contents = history.slice(-20).map((m) => ({
         role: m.role === 'user' ? 'user' : 'model',
         parts: [{ text: m.text }]
       }));
+
+      const payload = {
+        contents,
+        tools: [{ google_search: {} }]
+      };
+
+      if (sysPrompt.trim()) {
+        payload.systemInstruction = {
+          parts: [{ text: sysPrompt.trim() }]
+        };
+      }
 
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents })
+          body: JSON.stringify(payload)
         });
 
         if (!res.ok) {
@@ -484,6 +549,7 @@
         const decoder = new TextDecoder('utf-8');
         let fullText = '';
         let buffer = '';
+        let usedSearch = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -499,10 +565,16 @@
             if (!jsonStr) continue;
             try {
               const parsed = JSON.parse(jsonStr);
-              const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+              const candidate = parsed.candidates?.[0];
+              if (candidate?.groundingMetadata?.webSearchQueries?.length) {
+                usedSearch = true;
+                searchBadge.style.display = 'block';
+              }
+              const chunk = candidate?.content?.parts?.[0]?.text;
               if (chunk) {
                 fullText += chunk;
-                botBubble.textContent = fullText;
+                botBubble.dataset.rawText = fullText;
+                botBubble.innerHTML = formatRichText(fullText);
                 chatArea.scrollTop = chatArea.scrollHeight;
               }
             } catch (_) {}
@@ -510,8 +582,9 @@
         }
 
         if (!fullText) fullText = '（応答が空でした）';
-        botBubble.textContent = fullText;
-        history.push({ role: 'model', text: fullText, time: botTimeStr });
+        botBubble.dataset.rawText = fullText;
+        botBubble.innerHTML = formatRichText(fullText);
+        history.push({ role: 'model', text: fullText, time: botTimeStr, usedSearch });
         saveHistory();
       } catch (err) {
         botBubble.textContent = `エラー: ${err.message}`;
@@ -521,28 +594,26 @@
       }
     }
 
-    // テキストエリアの自動リサイズ
+    function openSettings() {
+      apiKeyInput.value = localStorage.getItem(STORAGE_KEY_API) || '';
+      modelSelect.value = localStorage.getItem(STORAGE_KEY_MODEL) || 'gemini-3.8-flash';
+      sysPromptInput.value = localStorage.getItem(STORAGE_KEY_SYSPROMPT) ?? DEFAULT_SYSPROMPT;
+      settingsModal.classList.add('open');
+    }
+
     msgInput.addEventListener('input', () => {
       msgInput.style.height = 'auto';
       msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + 'px';
     });
 
     sendBtn.addEventListener('click', sendMessage);
-
-    // 設定モーダル操作
-    document.getElementById('settingsBtn').onclick = () => {
-      apiKeyInput.value = localStorage.getItem(STORAGE_KEY_API) || '';
-      modelSelect.value = localStorage.getItem(STORAGE_KEY_MODEL) || 'gemini-3.8-flash';
-      settingsModal.classList.add('open');
-    };
-
-    document.getElementById('closeModalBtn').onclick = () => {
-      settingsModal.classList.remove('open');
-    };
+    document.getElementById('settingsBtn').onclick = openSettings;
+    document.getElementById('closeModalBtn').onclick = () => settingsModal.classList.remove('open');
 
     document.getElementById('saveSettingsBtn').onclick = () => {
       localStorage.setItem(STORAGE_KEY_API, apiKeyInput.value.trim());
       localStorage.setItem(STORAGE_KEY_MODEL, modelSelect.value);
+      localStorage.setItem(STORAGE_KEY_SYSPROMPT, sysPromptInput.value);
       settingsModal.classList.remove('open');
     };
 
@@ -554,10 +625,9 @@
       }
     };
 
-    // 初期表示
     renderAll();
     if (!localStorage.getItem(STORAGE_KEY_API)) {
-      settingsModal.classList.add('open');
+      openSettings();
     }
   </script>
 </body>
